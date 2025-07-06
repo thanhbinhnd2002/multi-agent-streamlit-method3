@@ -1,0 +1,7 @@
+pandas
+numpy
+networkx
+tqdm
+joblib
+openpyxl      # để đọc file .xlsx
+cupy-cuda12x  # nếu bạn dùng GPU (phiên bản cụ thể theo CUDA bạn cài)
