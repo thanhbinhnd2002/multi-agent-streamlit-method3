@@ -1,9 +1,10 @@
-# ✅ multi_Beta_Simulate_Pair.py — Pha 2 của phương pháp 3: Mô phỏng từ driver–target pairs
-# ✅ Dùng cho giao diện tkinter — không dùng joblib, trả về DataFrame kết quả
+# ✅ Phase2_Multi_Beta_Simulate_Pair.py — Bổ sung chạy song song bằng joblib cho phase 2
 
 import networkx as nx
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed  # ✅ Thêm joblib để chạy song song
+from multiprocessing import cpu_count
 
 # ✅ Hàm đọc mạng từ file .txt
 def import_network(file_path):
@@ -19,8 +20,19 @@ def import_network(file_path):
             G.add_edge(to_node, from_node, weight=float(weight))
     return G
 
-# ✅ Cập nhật trạng thái tại mỗi bước
+# ✅ Tạo ma trận kề và danh sách hàng xóm
+def build_adjacency(G, node_order):
+    n = len(node_order)
+    idx = {node: i for i, node in enumerate(node_order)}
+    A = np.zeros((n, n))
+    neighbors = {i: [] for i in range(n)}
+    for u, v, d in G.edges(data=True):
+        i, j = idx[u], idx[v]
+        A[i, j] += d.get("weight", 1.0)
+        neighbors[j].append(i)
+    return A, neighbors, idx
 
+# ✅ Cập nhật trạng thái tại mỗi bước
 def update_states(x, A, neighbors, beta_indices, beta_weights, fixed_nodes, EPSILON, DELTA):
     x_new = x.copy()
     for u in range(len(x)):
@@ -31,32 +43,7 @@ def update_states(x, A, neighbors, beta_indices, beta_weights, fixed_nodes, EPSI
         x_new[u] = x[u] + influence + beta_infl
     return np.clip(x_new, -1000, 1000)
 
-# ✅ Chạy mô phỏng cho một cặp (driver list, target list)
-def simulate_from_pair(G, drivers, targets, EPSILON, DELTA, MAX_ITER, TOL, N_BETA):
-    node_order = list(G.nodes())
-    A, neighbors, node_index = build_adjacency(G, node_order)
-    results = []
-
-    for alpha_node in targets:
-        if alpha_node not in node_index:
-            continue
-        alpha_idx = node_index[alpha_node]
-        x_state = np.zeros(len(node_order))
-        x_state[alpha_idx] = 1
-
-        for i in range(0, len(drivers), N_BETA):
-            beta_group = drivers[i:i + N_BETA]
-            if alpha_node in beta_group:
-                continue
-            x_state = simulate_one_round(G, beta_group, alpha_node, x_state, EPSILON, DELTA, MAX_ITER, TOL)
-
-        support = compute_total_support(x_state, alpha_idx)
-        results.append({"Alpha_Node": alpha_node, "Total_Support": support})
-
-    return pd.DataFrame(results)
-
-# ✅ Dạng chuẩn hóa cho mô phỏng từng lượt
-
+# ✅ Mô phỏng 1 lượt gán beta vào driver
 def simulate_one_round(G, beta_nodes, alpha_node, x_prev, EPSILON, DELTA, MAX_ITER, TOL):
     node_order = list(G.nodes())
     extended = node_order + [f"Beta{i}" for i in range(len(beta_nodes))]
@@ -85,34 +72,48 @@ def simulate_one_round(G, beta_nodes, alpha_node, x_prev, EPSILON, DELTA, MAX_IT
 
     return x[:len(node_order)]
 
-# ✅ Tạo ma trận kề và danh sách hàng xóm
-def build_adjacency(G, node_order):
-    n = len(node_order)
-    idx = {node: i for i, node in enumerate(node_order)}
-    A = np.zeros((n, n))
-    neighbors = {i: [] for i in range(n)}
-    for u, v, d in G.edges(data=True):
-        i, j = idx[u], idx[v]
-        A[i, j] += d.get("weight", 1.0)
-        neighbors[j].append(i)
-    return A, neighbors, idx
-
-# ✅ Tính tổng hỗ trợ sau mô phỏng
+# ✅ Tổng hỗ trợ
 
 def compute_total_support(x_state, alpha_idx):
     return sum(1 if x > 0 else -1 if x < 0 else 0 for i, x in enumerate(x_state) if i != alpha_idx)
 
-# ✅ Hàm gọi từ giao diện tkinter
+# ✅ Mô phỏng cho 1 alpha node
+
+def simulate_one_alpha(alpha_node, G, drivers, node_order, EPSILON, DELTA, MAX_ITER, TOL, N_BETA):
+    if alpha_node not in node_order:
+        return None
+    node_index = {node: i for i, node in enumerate(node_order)}
+    alpha_idx = node_index[alpha_node]
+    x_state = np.zeros(len(node_order))
+    x_state[alpha_idx] = 1
+
+    for i in range(0, len(drivers), N_BETA):
+        beta_group = drivers[i:i + N_BETA]
+        if alpha_node in beta_group:
+            continue
+        x_state = simulate_one_round(G, beta_group, alpha_node, x_state, EPSILON, DELTA, MAX_ITER, TOL)
+
+    support = compute_total_support(x_state, alpha_idx)
+    return {"Alpha_Node": alpha_node, "Total_Support": support}
+
+# ✅ Gọi từ file driver-target
 
 def simulate_from_driver_target_file(graph_path, pair_csv_path, EPSILON, DELTA, MAX_ITER, TOL, N_BETA):
     G = import_network(graph_path)
+    node_order = list(G.nodes())
     pair_df = pd.read_csv(pair_csv_path)
-    all_results = []
 
+    all_results = []
     for _, row in pair_df.iterrows():
         drivers = row['Driver_Nodes'].split(',')
         targets = row['Target_Nodes'].split(',')
-        df = simulate_from_pair(G, drivers, targets, EPSILON, DELTA, MAX_ITER, TOL, N_BETA)
-        all_results.append(df)
 
-    return pd.concat(all_results, ignore_index=True)
+        # ✅ Chạy song song các alpha_node
+        results = Parallel(n_jobs=cpu_count() // 2)(
+            delayed(simulate_one_alpha)(alpha_node, G, drivers, node_order,
+                                        EPSILON, DELTA, MAX_ITER, TOL, N_BETA)
+            for alpha_node in targets
+        )
+        all_results.extend([r for r in results if r is not None])
+
+    return pd.DataFrame(all_results)
