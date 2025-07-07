@@ -1,9 +1,8 @@
-# ✅ Find_target_and_driver_nodes.py — Pha 1 của phương pháp 3: Tìm cặp driver–target
-# ✅ Đầu ra là DataFrame các cặp (Driver_Nodes, Target_Nodes), có thể lưu CSV hoặc truyền tiếp pha 2
+# ✅ Find_target_and_driver_nodes.py — Pha 1 của phương pháp 3 (đã sửa lại logic đúng)
+# ✅ Tìm nhiều cặp (Driver_Nodes, Target_Nodes) qua nhiều vòng lặp như code gốc
 
 import networkx as nx
 import pandas as pd
-import os
 import random
 
 # ✅ Hàm đọc mạng từ file .txt
@@ -20,34 +19,47 @@ def import_network(file_path):
             G.add_edge(to_node, from_node, weight=weight)
     return G
 
-# ✅ Hàm chọn ngẫu nhiên target nodes dựa trên tỷ lệ %
-def select_target_nodes(G, ratio=0.2, seed=42):
-    nodes = list(G.nodes())
-    random.seed(seed)
-    num_targets = max(1, int(len(nodes) * ratio))
-    return random.sample(nodes, num_targets)
+# ✅ Hàm chọn tập target mới không giao với các target đã chọn trước đó
 
-# ✅ Hàm tìm driver nodes điều khiển được target nodes — dùng thuật toán đơn giản hóa (FVS, BFS, v.v.)
+def select_target_nodes_non_overlap(G, ratio, excluded_nodes, seed=42):
+    random.seed(seed)
+    available_nodes = list(set(G.nodes()) - excluded_nodes)
+    num_targets = max(1, int(len(G.nodes()) * ratio))
+    if len(available_nodes) <= num_targets:
+        return available_nodes
+    return random.sample(available_nodes, num_targets)
+
+# ✅ Tìm driver nodes đơn giản: tất cả node không thuộc target
+
 def find_driver_nodes(G, target_nodes):
-    # Demo: dùng tất cả các node ngoài target làm driver (có thể thay bằng thuật toán khác sau)
     return [node for node in G.nodes() if node not in target_nodes]
 
-# ✅ Hàm chính: xuất ra DataFrame chứa cặp driver-target
+# ✅ Hàm chính: lặp nhiều vòng chọn (D,T) không giao nhau và trả về DataFrame
 
 def find_driver_target_pairs(graph_path, ratio_target=0.2):
     G = import_network(graph_path)
-    target_nodes = select_target_nodes(G, ratio=ratio_target)
-    driver_nodes = find_driver_nodes(G, target_nodes)
+    all_nodes = set(G.nodes())
+    excluded_nodes = set()
+    round_idx = 1
+    all_pairs = []
 
-    # Chuẩn bị output theo định dạng: Driver_Nodes, Target_Nodes (lưu dưới dạng chuỗi node cách nhau bởi dấu ',')
-    driver_str = ",".join(driver_nodes)
-    target_str = ",".join(target_nodes)
+    while excluded_nodes < all_nodes:
+        target_nodes = select_target_nodes_non_overlap(G, ratio_target, excluded_nodes)
+        if not target_nodes:
+            break
+        excluded_nodes.update(target_nodes)
+        driver_nodes = find_driver_nodes(G, target_nodes)
 
-    df = pd.DataFrame([{"Driver_Nodes": driver_str, "Target_Nodes": target_str}])
+        driver_str = ",".join(driver_nodes)
+        target_str = ",".join(target_nodes)
+        all_pairs.append({"Driver_Nodes": driver_str, "Target_Nodes": target_str})
+        round_idx += 1
+
+    df = pd.DataFrame(all_pairs)
     return df
 
-# ✅ Nếu chạy độc lập (dùng thử)
+# ✅ Nếu chạy độc lập
 if __name__ == "__main__":
-    df = find_driver_target_pairs("../Data/HGRN.txt", ratio_target=0.2)
+    df = find_driver_target_pairs("../Data/HGRN.txt", ratio_target=0.05)
     df.to_csv("../Output/driver_target_pairs.csv", index=False)
-    print("✅ Đã lưu driver-target pairs")
+    print("✅ Đã lưu driver-target pairs theo nhiều vòng lặp không giao nhau")
